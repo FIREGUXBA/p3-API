@@ -1,0 +1,31 @@
+# SPAG-4D Runtime Dependencies
+# PyTorch is installed separately with CUDA support (see install.bat)
+
+# Core
+numpy>=1.24.0
+Pillow>=10.0.0
+plyfile>=1.0.0
+tqdm>=4.65.0
+click>=8.0.0
+scipy>=1.10.0
+
+# Server (Web UI)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
+# Model download
+huggingface_hub>=0.20.0
+gdown>=4.7.0
+
+# DAP model dependencies
+einops>=0.7.0
+opencv-python>=4.8.0
+torchmetrics>=1.0.0
+mmengine>=0.10.0
+safetensors>=0.4.0
+termcolor>=2.0
+omegaconf>=2.3
+
+# DA360 + SHARP model dependencies
+timm>=1.0.0

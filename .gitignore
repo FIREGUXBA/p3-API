@@ -1,0 +1,94 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+share/python-wheels/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+.env.*
+!.env.example
+
+# Testing / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Build / dist
+build/
+dist/
+develop-eggs/
+downloads/
+parts/
+sdist/
+var/
+wheels/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editor
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Local secrets / config (do not commit)
+*.pem
+*.key
+
+# ML / checkpoints (large binaries; adjust if you version small assets)
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.onnx
+*.bin
+checkpoints/
+weights/
+pretrained/
+# 若仅用于存放权重，可取消下一行注释： models/
+
+# Hugging Face / download caches (often under home; ignore if copied into repo)
+.cache/
+huggingface/
+
+# Runtime outputs / uploads (adjust to match your app paths)
+outputs/
+output/
+uploads/
+temp/
+tmp/
+# 高斯/网格导出；若需提交示例 .ply，可删此行
+*.ply
+
+# Project local assets / vendored deps (not tracked)
+static/
+TestImage/
+third_party/
