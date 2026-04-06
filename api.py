@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 import shutil
 import subprocess
+import urllib.parse
+import urllib.request
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -25,6 +27,11 @@ from starlette.concurrency import run_in_threadpool
 
 from panorama2gaussian import Panorama2Gaussian, ConversionResult
 
+from minio_service import MinIOService
+
+
+logger = logging.getLogger(__name__)
+
 
 # ─────────────────────────────────────────────────────────────────
 # 配置
@@ -35,6 +42,61 @@ TEMP_DIR = OUTPUT_ROOT / "jobs"
 JOB_TTL_SECONDS = 30 * 60  # 30 分钟
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 GPU_SEMAPHORE_LIMIT = 1
+
+
+def _normalize_minio_object_key(key: str) -> str:
+    k = key.strip().replace("\\", "/").lstrip("/")
+    if not k or ".." in k:
+        raise HTTPException(400, "非法的 MinIO 对象键")
+    return k
+
+
+def _suffix_from_name(name: str) -> str:
+    s = Path(name).suffix.lower()
+    if s in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"):
+        return s
+    return ".jpg"
+
+
+async def _read_upload_chunks(file: UploadFile) -> bytes:
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_UPLOAD_SIZE:
+            raise HTTPException(400, f"文件过大。最大：{MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _download_http_bytes(url: str) -> bytes:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Panorama2Gaussian/1.0"},
+        method="GET",
+    )
+    chunks = []
+    total = 0
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_SIZE:
+                raise HTTPException(400, f"文件过大。最大：{MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _load_bytes_from_minio_object(object_name: str) -> bytes:
+    data = MinIOService.get_file_bytes(object_name)
+    if len(data) > MAX_UPLOAD_SIZE:
+        raise HTTPException(400, f"文件过大。最大：{MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+    return data
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -60,6 +122,8 @@ class JobInfo:
         self.result: Optional[ConversionResult] = None
         self.error: Optional[str] = None
         self.params: dict = {}
+        self.minio_object_name: Optional[str] = None
+        self.minio_upload_error: Optional[str] = None
 
 
 class RefineJobInfo:
@@ -190,9 +254,17 @@ async def add_coop_coep(request: Request, call_next):
 # ─────────────────────────────────────────────────────────────────
 # API 端点
 # ─────────────────────────────────────────────────────────────────
-@app.post("/api/convert")
+@app.api_route("/api/convert", methods=["GET", "POST"])
 async def convert_panorama(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    minio_object: Optional[str] = Query(
+        None,
+        description="MinIO 桶内对象键（如 input/pano.jpg），与上传文件、source_url 三选一",
+    ),
+    source_url: Optional[str] = Query(
+        None,
+        description="图片的 http(s) URL（含 MinIO 预签名链接），与上传文件、minio_object 三选一",
+    ),
     depth_model: str = Query("da360", pattern="^(dap|da360)$"),
     stride: int = Query(2, ge=1, le=8),
     depth_min: Optional[float] = Query(None, ge=0.01),
@@ -203,23 +275,58 @@ async def convert_panorama(
     sparse_pruning: float = Query(0.0, ge=0.0, le=1.0),
     global_scale: float = Query(1.0, ge=0.1, le=10.0),
 ):
-    """将上传的全景图转换为高斯泼溅 PLY。"""
+    """将上传的全景图，或 MinIO/URL 指向的图片，转换为高斯泼溅 PLY。
+
+    GET 与 POST 均支持；GET 仅适用于查询参数 minio_object 或 source_url（不能 multipart 上传）。"""
 
     if depth_min is not None and depth_max is not None and depth_min >= depth_max:
         raise HTTPException(400, f"depth_min（{depth_min}）必须小于 depth_max（{depth_max}）。")
 
-    # 流式上传并增量检查大小
-    chunks = []
-    total = 0
-    while True:
-        chunk = await file.read(1024 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_UPLOAD_SIZE:
-            raise HTTPException(400, f"文件过大。最大：{MAX_UPLOAD_SIZE // 1024 // 1024}MB")
-        chunks.append(chunk)
-    content = b"".join(chunks)
+    mo = (minio_object or "").strip()
+    su = (source_url or "").strip()
+    has_file = file is not None
+
+    if mo and (su or has_file):
+        raise HTTPException(400, "minio_object 不能与 source_url 或 file 同时使用")
+    if su and has_file:
+        raise HTTPException(400, "source_url 不能与 file 同时使用")
+
+    if mo:
+        key = _normalize_minio_object_key(mo)
+        try:
+            content = await run_in_threadpool(_load_bytes_from_minio_object, key)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("从 MinIO 读取输入图失败")
+            raise HTTPException(502, f"从 MinIO 读取失败：{e}") from e
+        suffix = _suffix_from_name(key)
+        input_source = "minio"
+        input_ref = key
+    elif su:
+        parsed = urllib.parse.urlparse(su)
+        if parsed.scheme not in ("http", "https"):
+            raise HTTPException(400, "source_url 须为 http 或 https")
+        try:
+            content = await run_in_threadpool(_download_http_bytes, su)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("从 URL 下载输入图失败")
+            raise HTTPException(502, f"从 URL 下载失败：{e}") from e
+        suffix = _suffix_from_name(urllib.parse.unquote(parsed.path) or "")
+        input_source = "url"
+        input_ref = su
+    elif has_file:
+        content = await _read_upload_chunks(file)
+        suffix = _suffix_from_name(file.filename or "image.jpg")
+        input_source = "upload"
+        input_ref = file.filename or ""
+    else:
+        raise HTTPException(
+            400,
+            "请提供以下之一：multipart 上传 file，或查询参数 minio_object（桶内路径），或 source_url（图片 URL）",
+        )
 
     job_id = str(uuid.uuid4())
     job = JobInfo(job_id)
@@ -235,9 +342,13 @@ async def convert_panorama(
         "grazing_angle": grazing_angle,
         "sparse_pruning": sparse_pruning,
         "global_scale": global_scale,
+        "input_source": input_source,
+        "input_ref": input_ref,
     }
 
-    suffix = Path(file.filename).suffix if file.filename else '.jpg'
+    # suffix 已在上面分支赋值；统一保证带点的扩展名
+    if not suffix.startswith("."):
+        suffix = "." + suffix
     job.input_path = TEMP_DIR / f"{job_id}_input{suffix}"
     job.output_ply_path = TEMP_DIR / f"{job_id}_output.ply"
     job.depth_preview_path = TEMP_DIR / f"{job_id}_depth.jpg"
@@ -307,6 +418,20 @@ async def process_job(
             job.status = "complete"
             job.last_updated = time.time()
 
+            # 生成完成后上传到 MinIO：output/<job_id>.ply
+            if job.output_ply_path and job.output_ply_path.exists():
+                object_name = f"output/{job.job_id}.ply"
+                try:
+                    await run_in_threadpool(
+                        MinIOService.upload_file,
+                        str(job.output_ply_path),
+                        object_name,
+                    )
+                    job.minio_object_name = object_name
+                except Exception as me:
+                    job.minio_upload_error = str(me)
+                    logger.warning("MinIO 上传 PLY 失败：%s", me)
+
             # 保留输入全景图供后续精修（随任务过期一并清理）
 
     except Exception as e:
@@ -350,6 +475,16 @@ async def get_job_status(job_id: str):
         has_pano = job.input_path and job.input_path.exists()
         has_depth = job.depth_npy_path and job.depth_npy_path.exists()
         response["refineable"] = bool(has_ply and has_pano and has_depth)
+        if job.minio_object_name:
+            response["minio_object"] = job.minio_object_name
+            try:
+                response["minio_presigned_url"] = MinIOService.get_presigned_url(
+                    job.minio_object_name
+                )
+            except Exception:
+                pass
+        if job.minio_upload_error:
+            response["minio_upload_error"] = job.minio_upload_error
 
     if job.status == "error":
         response["error"] = job.error
@@ -726,7 +861,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Panorama2Gaussian 服务")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0", help="0.0.0.0 表示监听本机所有网卡")
     args = parser.parse_args()
 
     kill_existing_server(args.port)

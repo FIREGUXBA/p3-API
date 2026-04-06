@@ -13,6 +13,7 @@ scipy>=1.10.0
 fastapi>=0.100.0
 uvicorn>=0.23.0
 python-multipart>=0.0.6
+minio>=7.0.0
 
 # Model download
 huggingface_hub>=0.20.0

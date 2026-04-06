@@ -80,7 +80,11 @@ def download_models(model: str, verify: bool):
 
 @main.command()
 @click.option("--port", default=7860, help="服务端口")
-@click.option("--host", default="127.0.0.1", help="服务主机地址")
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    help="绑定地址；0.0.0.0 表示本机所有网卡（局域网可访问）",
+)
 @click.option("--reload", is_flag=True, help="开发时启用自动重载")
 def serve(port: int, host: str, reload: bool):
     """启动 Web UI 服务。"""
@@ -116,7 +120,13 @@ def serve(port: int, host: str, reload: bool):
 
     kill_existing_server(port)
 
-    click.echo(f"Starting Panorama2Gaussian web UI at http://{host}:{port}")
+    if host in ("0.0.0.0", "::"):
+        click.echo(
+            f"Starting Panorama2Gaussian web UI — open http://127.0.0.1:{port} "
+            f"(listening on {host}:{port})"
+        )
+    else:
+        click.echo(f"Starting Panorama2Gaussian web UI at http://{host}:{port}")
 
     uvicorn.run(
         "api:app",
