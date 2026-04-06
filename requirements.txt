@@ -1,4 +1,4 @@
-# SPAG-4D Runtime Dependencies
+# Panorama2Gaussian Runtime Dependencies
 # PyTorch is installed separately with CUDA support (see install.bat)
 
 # Core

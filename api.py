@@ -1,6 +1,6 @@
 # api.py
 """
-FastAPI backend for SPAG-4D web UI.
+Panorama2Gaussian Web 界面的 FastAPI 后端。
 """
 
 import asyncio
@@ -13,7 +13,7 @@ import subprocess
 from typing import Optional
 from contextlib import asynccontextmanager
 
-# Configure logging so refine pipeline messages are visible
+# 配置日志，使精修流水线消息可见
 logging.basicConfig(
     level=logging.INFO,
     format="[%(name)s] %(message)s",
@@ -27,18 +27,18 @@ from panorama2gaussian import Panorama2Gaussian, ConversionResult
 
 
 # ─────────────────────────────────────────────────────────────────
-# Configuration
+# 配置
 # ─────────────────────────────────────────────────────────────────
-# Store outputs in project directory (survives temp cleanup and reboots)
+# 输出保存在项目目录（临时清理与重启后仍可保留）
 OUTPUT_ROOT = Path(__file__).resolve().parent / "output"
 TEMP_DIR = OUTPUT_ROOT / "jobs"
-JOB_TTL_SECONDS = 30 * 60  # 30 minutes
+JOB_TTL_SECONDS = 30 * 60  # 30 分钟
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 GPU_SEMAPHORE_LIMIT = 1
 
 
 # ─────────────────────────────────────────────────────────────────
-# Global State
+# 全局状态
 # ─────────────────────────────────────────────────────────────────
 processor: Optional[Panorama2Gaussian] = None
 gpu_semaphore: Optional[asyncio.Semaphore] = None
@@ -46,7 +46,7 @@ jobs: dict = {}  # job_id -> JobInfo
 
 
 class JobInfo:
-    """Tracks a conversion job."""
+    """跟踪一次转换任务。"""
 
     def __init__(self, job_id: str):
         self.job_id = job_id
@@ -63,7 +63,7 @@ class JobInfo:
 
 
 class RefineJobInfo:
-    """Tracks a refinement job."""
+    """跟踪一次精修任务。"""
 
     def __init__(self, refine_id: str, source_job_id: str):
         self.refine_id = refine_id
@@ -85,26 +85,27 @@ refine_jobs: dict = {}  # refine_id -> RefineJobInfo
 
 
 # ─────────────────────────────────────────────────────────────────
-# Lifecycle Management
+# 生命周期管理
 # ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application startup and shutdown."""
+    """应用启动与关闭。"""
+
     global processor, gpu_semaphore
 
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Initialize with DA360 (default), fall back to DAP, then mock
+    # 优先初始化 DA360（默认），失败则尝试 DAP，再失败则使用 mock
     try:
         processor = Panorama2Gaussian(device="cuda", depth_model="da360")
-        print("Loaded DA360 depth model")
+        print("已加载 DA360 深度模型")
     except Exception as e:
-        print(f"DA360 not available ({e}), trying DAP...")
+        print(f"DA360 不可用（{e}），正在尝试 DAP...")
         try:
             processor = Panorama2Gaussian(device="cuda", depth_model="dap")
-            print("Loaded DAP depth model")
+            print("已加载 DAP 深度模型")
         except Exception as e2:
-            print(f"DAP not available ({e2}), using mock depth")
+            print(f"DAP 不可用（{e2}），使用 mock 深度")
             processor = Panorama2Gaussian(device="cuda", use_mock_dap=True)
 
     gpu_semaphore = asyncio.Semaphore(GPU_SEMAPHORE_LIMIT)
@@ -117,7 +118,8 @@ async def lifespan(app: FastAPI):
 
 
 async def cleanup_loop():
-    """Periodic cleanup of expired jobs and temp files."""
+    """定期清理过期任务与临时文件。"""
+
     while True:
         try:
             await asyncio.sleep(60)
@@ -125,12 +127,13 @@ async def cleanup_loop():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"Cleanup error: {e}")
+            print(f"清理出错：{e}")
             await asyncio.sleep(60)
 
 
 async def run_cleanup():
-    """Remove expired jobs and their files."""
+    """移除过期任务及其文件。"""
+
     now = time.time()
 
     expired_jobs = [
@@ -149,7 +152,7 @@ async def run_cleanup():
                     except Exception:
                         pass
 
-    # Clean orphaned files in temp dir
+    # 清理临时目录中的孤立文件
     active_paths = set()
     for j in jobs.values():
         if j.status in ("queued", "processing"):
@@ -174,7 +177,7 @@ app = FastAPI(title="Panorama2Gaussian", lifespan=lifespan)
 
 
 # ─────────────────────────────────────────────────────────────────
-# COOP/COEP Middleware (required for SharedArrayBuffer)
+# COOP/COEP 中间件（SharedArrayBuffer 所需）
 # ─────────────────────────────────────────────────────────────────
 @app.middleware("http")
 async def add_coop_coep(request: Request, call_next):
@@ -185,7 +188,7 @@ async def add_coop_coep(request: Request, call_next):
 
 
 # ─────────────────────────────────────────────────────────────────
-# API Endpoints
+# API 端点
 # ─────────────────────────────────────────────────────────────────
 @app.post("/api/convert")
 async def convert_panorama(
@@ -200,11 +203,12 @@ async def convert_panorama(
     sparse_pruning: float = Query(0.0, ge=0.0, le=1.0),
     global_scale: float = Query(1.0, ge=0.1, le=10.0),
 ):
-    """Convert uploaded panorama to Gaussian splat PLY."""
-    if depth_min is not None and depth_max is not None and depth_min >= depth_max:
-        raise HTTPException(400, f"depth_min ({depth_min}) must be less than depth_max ({depth_max}).")
+    """将上传的全景图转换为高斯泼溅 PLY。"""
 
-    # Stream upload with incremental size check
+    if depth_min is not None and depth_max is not None and depth_min >= depth_max:
+        raise HTTPException(400, f"depth_min（{depth_min}）必须小于 depth_max（{depth_max}）。")
+
+    # 流式上传并增量检查大小
     chunks = []
     total = 0
     while True:
@@ -213,7 +217,7 @@ async def convert_panorama(
             break
         total += len(chunk)
         if total > MAX_UPLOAD_SIZE:
-            raise HTTPException(400, f"File too large. Max: {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+            raise HTTPException(400, f"文件过大。最大：{MAX_UPLOAD_SIZE // 1024 // 1024}MB")
         chunks.append(chunk)
     content = b"".join(chunks)
 
@@ -274,7 +278,8 @@ async def process_job(
     sparse_pruning: float = 0.0,
     global_scale: float = 1.0,
 ):
-    """Process conversion job with GPU semaphore."""
+    """在 GPU 信号量控制下处理转换任务。"""
+
     try:
         job.status = "queued"
         async with gpu_semaphore:
@@ -302,22 +307,23 @@ async def process_job(
             job.status = "complete"
             job.last_updated = time.time()
 
-            # Keep input panorama for potential refinement (cleaned up with job expiry)
+            # 保留输入全景图供后续精修（随任务过期一并清理）
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         job.status = "error"
         job.error = str(e)
-        print(f"Job failed with error: {e}")
+        print(f"任务失败，错误：{e}")
         job.last_updated = time.time()
 
 
 @app.get("/api/status/{job_id}")
 async def get_job_status(job_id: str):
-    """Get job status and result."""
+    """获取任务状态与结果。"""
+
     if job_id not in jobs:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "未找到任务")
 
     job = jobs[job_id]
 
@@ -339,7 +345,7 @@ async def get_job_status(job_id: str):
         response["ply_url"] = f"/api/download/{job_id}"
         if job.depth_preview_path and job.depth_preview_path.exists():
             response["depth_preview_url"] = f"/api/depth_preview/{job_id}"
-        # Refinement readiness: need PLY, panorama, and depth
+        # 精修就绪条件：需要 PLY、全景图与深度
         has_ply = job.output_ply_path and job.output_ply_path.exists()
         has_pano = job.input_path and job.input_path.exists()
         has_depth = job.depth_npy_path and job.depth_npy_path.exists()
@@ -356,16 +362,17 @@ async def get_job_status(job_id: str):
 
 @app.get("/api/depth_preview/{job_id}")
 async def get_depth_preview(job_id: str):
-    """Get depth map preview image."""
+    """获取深度图预览图像。"""
+
     if job_id not in jobs:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "未找到任务")
 
     job = jobs[job_id]
     if job.status != "complete":
-        raise HTTPException(400, "Job not complete")
+        raise HTTPException(400, "任务未完成")
 
     if not job.depth_preview_path or not job.depth_preview_path.exists():
-        raise HTTPException(404, "Depth preview not available")
+        raise HTTPException(404, "暂无深度预览")
 
     return FileResponse(
         job.depth_preview_path,
@@ -376,48 +383,50 @@ async def get_depth_preview(job_id: str):
 
 @app.get("/api/download/{job_id}")
 async def download_file(job_id: str):
-    """Download the generated PLY file."""
+    """下载生成的 PLY 文件。"""
+
     if job_id not in jobs:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "未找到任务")
 
     job = jobs[job_id]
     if job.status != "complete":
-        raise HTTPException(400, "Job not complete")
+        raise HTTPException(400, "任务未完成")
 
     if not job.output_ply_path or not job.output_ply_path.exists():
-        raise HTTPException(404, "File not found")
+        raise HTTPException(404, "未找到文件")
 
     return FileResponse(
         job.output_ply_path,
         media_type="application/octet-stream",
-        filename=f"spag4d_{job_id[:8]}.ply"
+        filename=f"panorama2gaussian_{job_id[:8]}.ply"
     )
 
 
 # ─────────────────────────────────────────────────────────────────
-# Refinement Endpoints
+# 精修端点
 # ─────────────────────────────────────────────────────────────────
 @app.post("/api/refine")
 async def start_refinement(
-    job_id: str = Query(..., description="Source conversion job ID"),
+    job_id: str = Query(..., description="源转换任务 ID"),
     max_rounds: int = Query(3, ge=1, le=5),
     num_cameras: int = Query(36, ge=6, le=72),
     finetune_steps: int = Query(500, ge=100, le=2000),
 ):
-    """Start GSFix3D refinement on an existing conversion job."""
+    """在已有转换任务上启动 GSFix3D 精修。"""
+
     if job_id not in jobs:
-        raise HTTPException(404, "Source job not found")
+        raise HTTPException(404, "未找到源任务")
 
     job = jobs[job_id]
     if job.status != "complete":
-        raise HTTPException(400, "Source job not complete")
+        raise HTTPException(400, "源任务未完成")
 
     if not (job.output_ply_path and job.output_ply_path.exists()):
-        raise HTTPException(400, "PLY file not found")
+        raise HTTPException(400, "未找到 PLY 文件")
     if not (job.input_path and job.input_path.exists()):
-        raise HTTPException(400, "Input panorama not found (may have been cleaned up)")
+        raise HTTPException(400, "未找到输入全景图（可能已被清理）")
     if not (job.depth_npy_path and job.depth_npy_path.exists()):
-        raise HTTPException(400, "Depth map not found")
+        raise HTTPException(400, "未找到深度图")
 
     refine_id = str(uuid.uuid4())
     refine_job = RefineJobInfo(refine_id, job_id)
@@ -439,7 +448,8 @@ async def start_refinement(
 
 
 async def process_refinement(refine_job: RefineJobInfo, source_job: JobInfo):
-    """Run refinement pipeline in background."""
+    """在后台运行精修流水线。"""
+
     try:
         async with gpu_semaphore:
             refine_job.status = "processing"
@@ -464,7 +474,8 @@ async def process_refinement(refine_job: RefineJobInfo, source_job: JobInfo):
 
 
 def _run_refinement(source_job: JobInfo, refine_job: RefineJobInfo) -> dict:
-    """Execute the GSFix3D refinement pipeline (blocking, runs in thread)."""
+    """执行 GSFix3D 精修流水线（阻塞，在线程中运行）。"""
+
     import numpy as np
     from panorama2gaussian.refine import refine_splat
 
@@ -503,9 +514,10 @@ def _run_refinement(source_job: JobInfo, refine_job: RefineJobInfo) -> dict:
 
 @app.get("/api/refine/status/{refine_id}")
 async def get_refine_status(refine_id: str):
-    """Get refinement job status."""
+    """获取精修任务状态。"""
+
     if refine_id not in refine_jobs:
-        raise HTTPException(404, "Refinement job not found")
+        raise HTTPException(404, "未找到精修任务")
 
     rj = refine_jobs[refine_id]
     response = {
@@ -532,16 +544,17 @@ async def get_refine_status(refine_id: str):
 
 @app.get("/api/refine/download/{refine_id}")
 async def download_refined_ply(refine_id: str):
-    """Download refined PLY file."""
+    """下载精修后的 PLY 文件。"""
+
     if refine_id not in refine_jobs:
-        raise HTTPException(404, "Refinement job not found")
+        raise HTTPException(404, "未找到精修任务")
 
     rj = refine_jobs[refine_id]
     if rj.status != "complete":
-        raise HTTPException(400, "Refinement not complete")
+        raise HTTPException(400, "精修未完成")
 
     if not rj.output_ply_path or not rj.output_ply_path.exists():
-        raise HTTPException(404, "Refined PLY not found")
+        raise HTTPException(404, "未找到精修 PLY")
 
     return FileResponse(
         rj.output_ply_path,
@@ -552,28 +565,29 @@ async def download_refined_ply(refine_id: str):
 
 @app.get("/api/refine/diagnostics/{refine_id}")
 async def get_refine_diagnostics(refine_id: str):
-    """List diagnostic images for a refinement job."""
+    """列出某次精修任务的诊断图像。"""
+
     if refine_id not in refine_jobs:
-        raise HTTPException(404, "Refinement job not found")
+        raise HTTPException(404, "未找到精修任务")
 
     rj = refine_jobs[refine_id]
-    # Diagnostics are saved in output_dir/diagnostics/ subdirectory
+    # 诊断结果保存在 output_dir/diagnostics/ 子目录
     diag_dir = rj.diagnostics_dir / "diagnostics" if rj.diagnostics_dir else None
     if not diag_dir or not diag_dir.exists():
-        # Fallback to root diagnostics dir
+        # 回退到诊断根目录
         diag_dir = rj.diagnostics_dir
     if not diag_dir or not diag_dir.exists():
-        raise HTTPException(404, "No diagnostics available")
+        raise HTTPException(404, "暂无诊断数据")
 
     images = sorted(
         f.name for f in diag_dir.iterdir()
         if f.suffix.lower() in (".png", ".jpg", ".jpeg")
     )
 
-    # Group by camera for the preview gallery
+    # 按相机分组供预览画廊使用
     cameras = {}
     for name in images:
-        # Parse r{round}_cam{idx}_{type}.png
+        # 解析 r{轮次}_cam{索引}_{类型}.png
         parts = name.replace(".png", "").replace(".jpg", "").split("_")
         cam_key = "_".join(parts[:2]) if len(parts) >= 3 else name
         img_type = parts[2] if len(parts) >= 3 else "combined"
@@ -593,22 +607,23 @@ async def get_refine_diagnostics(refine_id: str):
 
 @app.get("/api/refine/diagnostics/{refine_id}/{filename}")
 async def get_refine_diagnostic_image(refine_id: str, filename: str):
-    """Serve a single diagnostic image."""
+    """提供单张诊断图像。"""
+
     if refine_id not in refine_jobs:
-        raise HTTPException(404, "Refinement job not found")
+        raise HTTPException(404, "未找到精修任务")
 
     rj = refine_jobs[refine_id]
     if not rj.diagnostics_dir:
-        raise HTTPException(404, "No diagnostics available")
+        raise HTTPException(404, "暂无诊断数据")
 
-    # Sanitize filename to prevent path traversal
+    # 规范化文件名，防止路径穿越
     safe_name = Path(filename).name
-    # Check in diagnostics/ subdirectory first, then root
+    # 先在 diagnostics/ 子目录查找，再在根目录查找
     image_path = rj.diagnostics_dir / "diagnostics" / safe_name
     if not image_path.exists():
         image_path = rj.diagnostics_dir / safe_name
     if not image_path.exists() or not image_path.is_file():
-        raise HTTPException(404, "Diagnostic image not found")
+        raise HTTPException(404, "未找到诊断图像")
 
     media_type = "image/png" if safe_name.endswith(".png") else "image/jpeg"
     return FileResponse(image_path, media_type=media_type)
@@ -616,25 +631,27 @@ async def get_refine_diagnostic_image(refine_id: str, filename: str):
 
 @app.get("/api/refine/metrics/{refine_id}")
 async def get_refine_metrics(refine_id: str):
-    """Get refinement metrics."""
+    """获取精修指标。"""
+
     if refine_id not in refine_jobs:
-        raise HTTPException(404, "Refinement job not found")
+        raise HTTPException(404, "未找到精修任务")
 
     rj = refine_jobs[refine_id]
     if rj.status != "complete":
-        raise HTTPException(400, "Refinement not complete")
+        raise HTTPException(400, "精修未完成")
 
     return JSONResponse(rj.metrics)
 
 
 @app.post("/api/shutdown")
 async def shutdown_server(request: Request):
-    """Shut down the Panorama2Gaussian server (localhost only)."""
+    """关闭 Panorama2Gaussian 服务（仅本机）。"""
+
     import os
 
     client = request.client.host if request.client else ""
     if client not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(403, "Shutdown is only allowed from localhost")
+        raise HTTPException(403, "仅允许从本机关闭服务")
 
     async def _exit():
         await asyncio.sleep(0.5)
@@ -646,7 +663,8 @@ async def shutdown_server(request: Request):
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
+    """健康检查端点。"""
+
     return {
         "status": "ok",
         "gpu_available": gpu_semaphore._value > 0 if gpu_semaphore else False,
@@ -655,20 +673,21 @@ async def health_check():
     }
 
 
-# Serve test images
+# 提供测试图像
 TEST_IMAGE_DIR = Path("./TestImage")
 if TEST_IMAGE_DIR.exists():
     app.mount("/TestImage", StaticFiles(directory="TestImage"), name="test-images")
 
-# Serve static files
+# 提供静态文件
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 # ─────────────────────────────────────────────────────────────────
-# Startup: kill any existing server on the target port
+# 启动：在绑定端口前结束占用该端口的旧进程
 # ─────────────────────────────────────────────────────────────────
 def kill_existing_server(port: int):
-    """Kill any existing Panorama2Gaussian server on *port* before we bind."""
+    """在绑定前结束占用 *port* 的 Panorama2Gaussian 服务（若存在）。"""
+
     import urllib.request
 
     try:
@@ -705,7 +724,7 @@ DEFAULT_PORT = 7860
 if __name__ == "__main__":
     import argparse, uvicorn
 
-    parser = argparse.ArgumentParser(description="Panorama2Gaussian server")
+    parser = argparse.ArgumentParser(description="Panorama2Gaussian 服务")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 # panorama2gaussian/cli.py
 """
-SPAG-4D 命令行接口：模型下载与 Web UI。
+Panorama2Gaussian 命令行接口：模型下载与 Web UI。
 """
 
 import click
@@ -10,7 +10,7 @@ from pathlib import Path
 @click.group()
 @click.version_option(version="3.0.0")
 def main():
-    """SPAG-4D：下载模型权重或启动 Web UI。"""
+    """Panorama2Gaussian：下载模型权重或启动 Web UI。"""
     pass
 
 
@@ -116,7 +116,7 @@ def serve(port: int, host: str, reload: bool):
 
     kill_existing_server(port)
 
-    click.echo(f"Starting SPAG-4D web UI at http://{host}:{port}")
+    click.echo(f"Starting Panorama2Gaussian web UI at http://{host}:{port}")
 
     uvicorn.run(
         "api:app",

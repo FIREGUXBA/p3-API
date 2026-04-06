@@ -1,4 +1,4 @@
-# SPAG-4D Refinement Pipeline Dependencies
+# Panorama2Gaussian Refinement Pipeline Dependencies
 # Requires: base requirements.txt + PyTorch with CUDA
 # Needs ~24 GB VRAM for Klein 9B inference
 
