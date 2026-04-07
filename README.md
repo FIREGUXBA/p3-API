@@ -24,10 +24,18 @@ python -m venv .venv
 - **Windows（cmd）：** `.venv\Scripts\activate.bat`
 - **Windows（PowerShell）：** `.venv\Scripts\Activate.ps1`
 
-安装 **CUDA 12.1** 对应的 PyTorch（与 `cu121`  wheel 一致；若你本机 CUDA 版本不同，请到 [PyTorch 安装页](https://pytorch.org/get-started/locally/) 选择对应命令）：
+安装 PyTorch（若本机 CUDA 版本与下述不一致，请到 [PyTorch 安装页](https://pytorch.org/get-started/locally/) 自选）：
+
+- **Windows / Linux（NVIDIA GPU，CUDA 12.1 / `cu121` wheel）：**
 
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+- **macOS：** 无 NVIDIA CUDA 官方 wheel，请用默认索引安装（Apple Silicon 上可用 **MPS** 加速；Intel Mac 多为 CPU）：
+
+```bash
+pip install torch torchvision
 ```
 
 再安装项目依赖：

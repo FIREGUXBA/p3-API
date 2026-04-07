@@ -1,6 +1,6 @@
 # api.py
 """
-Panorama2Gaussian Web 界面的 FastAPI 后端。
+Panorama2Gaussian 的 FastAPI HTTP API。
 """
 
 import asyncio
@@ -22,7 +22,6 @@ logging.basicConfig(
 )
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from panorama2gaussian import Panorama2Gaussian, ConversionResult
@@ -808,13 +807,16 @@ async def health_check():
     }
 
 
-# 提供测试图像
-TEST_IMAGE_DIR = Path("./TestImage")
-if TEST_IMAGE_DIR.exists():
-    app.mount("/TestImage", StaticFiles(directory="TestImage"), name="test-images")
+@app.get("/")
+async def root():
+    """纯 API 服务：根路径返回 OpenAPI 文档与健康检查入口。"""
 
-# 提供静态文件
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+    return {
+        "service": "Panorama2Gaussian",
+        "openapi": "/openapi.json",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────
