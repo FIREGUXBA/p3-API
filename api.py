@@ -414,10 +414,8 @@ async def process_job(
             )
 
             job.result = result
-            job.status = "complete"
-            job.last_updated = time.time()
 
-            # 生成完成后上传到 MinIO：output/<job_id>.ply
+            # 须在标记 complete 之前完成上传，否则轮询会在 minio_object 写入前看到 complete
             if job.output_ply_path and job.output_ply_path.exists():
                 object_name = f"output/{job.job_id}.ply"
                 try:
@@ -427,9 +425,16 @@ async def process_job(
                         object_name,
                     )
                     job.minio_object_name = object_name
+                    try:
+                        job.output_ply_path.unlink()
+                    except OSError as oe:
+                        logger.warning("删除本地 PLY 失败：%s", oe)
                 except Exception as me:
                     job.minio_upload_error = str(me)
                     logger.warning("MinIO 上传 PLY 失败：%s", me)
+
+            job.status = "complete"
+            job.last_updated = time.time()
 
             # 保留输入全景图供后续精修（随任务过期一并清理）
 
@@ -466,7 +471,8 @@ async def get_job_status(job_id: str):
         response["splat_count"] = job.result.splat_count
         response["file_size_mb"] = round(job.result.file_size / 1024 / 1024, 2)
         response["processing_time"] = round(job.result.processing_time, 2)
-        response["ply_url"] = f"/api/download/{job_id}"
+        if job.output_ply_path and job.output_ply_path.exists():
+            response["ply_url"] = f"/api/download/{job_id}"
         if job.depth_preview_path and job.depth_preview_path.exists():
             response["depth_preview_url"] = f"/api/depth_preview/{job_id}"
         # 精修就绪条件：需要 PLY、全景图与深度
