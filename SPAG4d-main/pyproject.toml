@@ -1,0 +1,98 @@
+[project]
+name = "spag4d"
+version = "3.0.0"
+description = "Convert 360° equirectangular panoramas to 3D Gaussian Splats"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "SPAG-4D Team"}
+]
+keywords = ["gaussian-splatting", "3dgs", "panorama", "360", "depth-estimation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "plyfile>=1.0",
+    "tqdm>=4.65",
+    "click>=8.0",
+    "scipy>=1.10",
+    "opencv-python>=4.8",
+    "safetensors>=0.4.0",
+    "einops>=0.6",
+    # DAP model dependencies
+    "torchmetrics>=1.0",
+    "termcolor>=2.0",
+    "omegaconf>=2.3",
+    "mmengine>=0.10",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "python-multipart>=0.0.6",
+]
+download = [
+    "huggingface_hub>=0.20",
+]
+sharp = [
+    # ml-sharp is a pure PyTorch inference repo.
+    # pip install --no-deps https://github.com/apple/ml-sharp/archive/refs/heads/main.zip
+]
+all = [
+    "spag4d[server,download,sharp]",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "black>=23.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+spag4d = "spag4d.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/cedarconnor/SPAG4d"
+Documentation = "https://github.com/cedarconnor/SPAG4d#readme"
+Repository = "https://github.com/cedarconnor/SPAG4d"
+Issues = "https://github.com/cedarconnor/SPAG4d/issues"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["spag4d*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+asyncio_mode = "auto"
