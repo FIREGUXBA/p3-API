@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-本地文件夹：ERP 全景 -> PLY（Panorama2Gaussian），可选 GSFix3D 精修。
+本地文件夹：ERP 全景 -> PLY（SPAG-4D），可选 GSFix3D 精修。
 
-在项目根目录执行（保证可 import panorama2gaussian）：
+在项目根目录执行（保证可 import spag4d）：
   python scripts/local_pano2gs.py -i ./in/pano.jpg -o ./out
   python scripts/local_pano2gs.py -i ./in/pano.jpg -o ./out --refine
 
@@ -159,14 +159,14 @@ def main() -> int:
         diag_dir = (diag_dir or (out_dir / "refine_diagnostics")).resolve()
 
     if not args.refine_only:
-        from panorama2gaussian import Panorama2Gaussian
+        from spag4d import SPAG4D
 
         depth_preview = None
         if args.depth_preview:
             depth_preview = out_dir / f"{stem}_depth_preview.jpg"
 
         print(f"[convert] 输入: {pano_path}\n[convert] 输出 PLY: {ply_path}", flush=True)
-        converter = Panorama2Gaussian(
+        converter = SPAG4D(
             device=args.device,
             depth_model=args.depth_model,
         )
@@ -195,7 +195,7 @@ def main() -> int:
 
     if args.refine or args.refine_only:
         import numpy as np
-        from panorama2gaussian.refine import refine_splat
+        from spag4d.refine import refine_splat
 
         depth_map = np.load(str(depth_npy))
         print(
