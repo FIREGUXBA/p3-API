@@ -47,9 +47,12 @@ def refine_splat(
     if diag_dir:
         diag_dir.mkdir(parents=True, exist_ok=True)
 
-    # 加载全景
+    # 加载全景（转为 RGB，避免 RGBA 等与 mesh_extract reshape(-1,3) 不兼容）
     from PIL import Image
-    panorama = np.array(Image.open(panorama_path)).astype(np.float32) / 255.0
+    _pan = Image.open(panorama_path)
+    if _pan.mode != "RGB":
+        _pan = _pan.convert("RGB")
+    panorama = np.array(_pan).astype(np.float32) / 255.0
 
     report("camera_rig", 5)
 

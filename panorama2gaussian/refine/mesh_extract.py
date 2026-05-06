@@ -15,6 +15,15 @@ def extract_conditioning_mesh(depth_map, panorama, simplify_ratio=0.1):
     import open3d as o3d
     import trimesh
 
+    pan = np.asarray(panorama)
+    if pan.ndim == 2:
+        pan = np.stack([pan, pan, pan], axis=-1)
+    elif pan.shape[-1] == 4:
+        pan = pan[..., :3]
+    elif pan.shape[-1] == 1:
+        pan = np.repeat(pan, 3, axis=-1)
+    panorama = pan
+
     h, w = depth_map.shape
 
     # SPAG 约定（spherical_grid.py）：θ 从左到右递减，
