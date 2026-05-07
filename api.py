@@ -1,6 +1,6 @@
 # api.py
 """
-Panorama2Gaussian 的 FastAPI HTTP API。
+SPAG-4D 的 FastAPI HTTP API。
 """
 
 import asyncio
@@ -24,7 +24,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, Re
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from panorama2gaussian import Panorama2Gaussian, ConversionResult
+from spag4d import SPAG4D, ConversionResult
 
 from minio_service import MinIOService
 
@@ -74,7 +74,7 @@ async def _read_upload_chunks(file: UploadFile) -> bytes:
 def _download_http_bytes(url: str) -> bytes:
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "Panorama2Gaussian/1.0"},
+        headers={"User-Agent": "SPAG-4D/1.0"},
         method="GET",
     )
     chunks = []
@@ -101,7 +101,7 @@ def _load_bytes_from_minio_object(object_name: str) -> bytes:
 # ─────────────────────────────────────────────────────────────────
 # 全局状态
 # ─────────────────────────────────────────────────────────────────
-processor: Optional[Panorama2Gaussian] = None
+processor: Optional[SPAG4D] = None
 gpu_semaphore: Optional[asyncio.Semaphore] = None
 jobs: dict = {}  # job_id -> JobInfo
 
@@ -123,6 +123,9 @@ class JobInfo:
         self.params: dict = {}
         self.minio_object_name: Optional[str] = None
         self.minio_upload_error: Optional[str] = None
+        self.minio_depth_preview_object: Optional[str] = None
+        self.minio_depth_npy_object: Optional[str] = None
+        self.minio_depth_upload_error: Optional[str] = None
 
 
 class RefineJobInfo:
@@ -160,16 +163,16 @@ async def lifespan(app: FastAPI):
 
     # 优先初始化 DA360（默认），失败则尝试 DAP，再失败则使用 mock
     try:
-        processor = Panorama2Gaussian(device="cuda", depth_model="da360")
+        processor = SPAG4D(device="cuda", depth_model="da360")
         print("已加载 DA360 深度模型")
     except Exception as e:
         print(f"DA360 不可用（{e}），正在尝试 DAP...")
         try:
-            processor = Panorama2Gaussian(device="cuda", depth_model="dap")
+            processor = SPAG4D(device="cuda", depth_model="dap")
             print("已加载 DAP 深度模型")
         except Exception as e2:
             print(f"DAP 不可用（{e2}），使用 mock 深度")
-            processor = Panorama2Gaussian(device="cuda", use_mock_dap=True)
+            processor = SPAG4D(device="cuda", use_mock_dap=True)
 
     gpu_semaphore = asyncio.Semaphore(GPU_SEMAPHORE_LIMIT)
     cleanup_task = asyncio.create_task(cleanup_loop())
@@ -236,7 +239,7 @@ async def run_cleanup():
         pass
 
 
-app = FastAPI(title="Panorama2Gaussian", lifespan=lifespan)
+app = FastAPI(title="SPAG-4D", lifespan=lifespan)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -433,6 +436,35 @@ async def process_job(
                     job.minio_upload_error = str(me)
                     logger.warning("MinIO 上传 PLY 失败：%s", me)
 
+            # 深度预览与深度数组同步写入 MinIO（保留本地文件供 /api/refine 使用）
+            depth_err_parts: list = []
+            if job.depth_preview_path and job.depth_preview_path.exists():
+                preview_key = f"output/{job.job_id}_depth.jpg"
+                try:
+                    await run_in_threadpool(
+                        MinIOService.upload_file,
+                        str(job.depth_preview_path),
+                        preview_key,
+                    )
+                    job.minio_depth_preview_object = preview_key
+                except Exception as me:
+                    depth_err_parts.append(f"depth_preview:{me}")
+                    logger.warning("MinIO 上传深度预览失败：%s", me)
+            if job.depth_npy_path and job.depth_npy_path.exists():
+                npy_key = f"output/{job.job_id}_depth.npy"
+                try:
+                    await run_in_threadpool(
+                        MinIOService.upload_file,
+                        str(job.depth_npy_path),
+                        npy_key,
+                    )
+                    job.minio_depth_npy_object = npy_key
+                except Exception as me:
+                    depth_err_parts.append(f"depth_npy:{me}")
+                    logger.warning("MinIO 上传深度 npy 失败：%s", me)
+            if depth_err_parts:
+                job.minio_depth_upload_error = "; ".join(depth_err_parts)
+
             job.status = "complete"
             job.last_updated = time.time()
 
@@ -475,8 +507,10 @@ async def get_job_status(job_id: str):
             response["ply_url"] = f"/api/download/{job_id}"
         if job.depth_preview_path and job.depth_preview_path.exists():
             response["depth_preview_url"] = f"/api/depth_preview/{job_id}"
-        # 精修就绪条件：需要 PLY、全景图与深度
-        has_ply = job.output_ply_path and job.output_ply_path.exists()
+        # 精修就绪条件：PLY（本地或已在 MinIO）、全景图与深度
+        has_ply = (job.output_ply_path and job.output_ply_path.exists()) or bool(
+            job.minio_object_name
+        )
         has_pano = job.input_path and job.input_path.exists()
         has_depth = job.depth_npy_path and job.depth_npy_path.exists()
         response["refineable"] = bool(has_ply and has_pano and has_depth)
@@ -490,6 +524,24 @@ async def get_job_status(job_id: str):
                 pass
         if job.minio_upload_error:
             response["minio_upload_error"] = job.minio_upload_error
+        if job.minio_depth_preview_object:
+            response["minio_depth_preview_object"] = job.minio_depth_preview_object
+            try:
+                response["minio_depth_preview_presigned_url"] = (
+                    MinIOService.get_presigned_url(job.minio_depth_preview_object)
+                )
+            except Exception:
+                pass
+        if job.minio_depth_npy_object:
+            response["minio_depth_npy_object"] = job.minio_depth_npy_object
+            try:
+                response["minio_depth_npy_presigned_url"] = MinIOService.get_presigned_url(
+                    job.minio_depth_npy_object
+                )
+            except Exception:
+                pass
+        if job.minio_depth_upload_error:
+            response["minio_depth_upload_error"] = job.minio_depth_upload_error
 
     if job.status == "error":
         response["error"] = job.error
@@ -538,7 +590,7 @@ async def download_file(job_id: str):
     return FileResponse(
         job.output_ply_path,
         media_type="application/octet-stream",
-        filename=f"panorama2gaussian_{job_id[:8]}.ply"
+        filename=f"spag4d_{job_id[:8]}.ply"
     )
 
 
@@ -561,8 +613,9 @@ async def start_refinement(
     if job.status != "complete":
         raise HTTPException(400, "源任务未完成")
 
-    if not (job.output_ply_path and job.output_ply_path.exists()):
-        raise HTTPException(400, "未找到 PLY 文件")
+    has_local_ply = job.output_ply_path and job.output_ply_path.exists()
+    if not has_local_ply and not job.minio_object_name:
+        raise HTTPException(400, "未找到 PLY 文件（本地不存在且无 MinIO 对象）")
     if not (job.input_path and job.input_path.exists()):
         raise HTTPException(400, "未找到输入全景图（可能已被清理）")
     if not (job.depth_npy_path and job.depth_npy_path.exists()):
@@ -617,39 +670,61 @@ def _run_refinement(source_job: JobInfo, refine_job: RefineJobInfo) -> dict:
     """执行 GSFix3D 精修流水线（阻塞，在线程中运行）。"""
 
     import numpy as np
-    from panorama2gaussian.refine import refine_splat
+    from spag4d.refine import refine_splat
 
     params = refine_job.params
     output_dir = refine_job.diagnostics_dir or TEMP_DIR / f"{refine_job.refine_id}_out"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    depth_map = np.load(str(source_job.depth_npy_path))
+    ply_local_download: Optional[Path] = None
+    try:
+        if source_job.output_ply_path and source_job.output_ply_path.exists():
+            ply_path_str = str(source_job.output_ply_path)
+        elif source_job.minio_object_name:
+            ply_local_download = TEMP_DIR / f"{refine_job.refine_id}_source.ply"
+            MinIOService.download_file(
+                source_job.minio_object_name,
+                str(ply_local_download),
+            )
+            ply_path_str = str(ply_local_download)
+        else:
+            raise FileNotFoundError(
+                "无可用 PLY：本地不存在且任务未关联 MinIO 对象"
+            )
 
-    def update_progress(round_num, stage, pct):
-        refine_job.round_number = round_num
-        refine_job.stage = stage
-        refine_job.progress_pct = pct
-        refine_job.last_updated = time.time()
+        depth_map = np.load(str(source_job.depth_npy_path))
 
-    result = refine_splat(
-        ply_path=str(source_job.output_ply_path),
-        panorama_path=str(source_job.input_path),
-        depth_map=depth_map,
-        max_iterations=params.get("max_rounds", 3),
-        num_cameras=params.get("num_cameras", 36),
-        finetune_steps=params.get("finetune_steps", 500),
-        output_path=str(refine_job.output_ply_path),
-        progress_callback=update_progress,
-        diagnostics_dir=str(output_dir / "diagnostics"),
-    )
+        def update_progress(round_num, stage, pct):
+            refine_job.round_number = round_num
+            refine_job.stage = stage
+            refine_job.progress_pct = pct
+            refine_job.last_updated = time.time()
 
-    return {
-        "initial_hole_fraction": result["initial_hole_fraction"],
-        "final_hole_fraction": result["final_hole_fraction"],
-        "final_count": result["gaussians_count"],
-        "iterations_used": result["iterations_used"],
-        "total_time": result["total_time"],
-    }
+        result = refine_splat(
+            ply_path=ply_path_str,
+            panorama_path=str(source_job.input_path),
+            depth_map=depth_map,
+            max_iterations=params.get("max_rounds", 3),
+            num_cameras=params.get("num_cameras", 36),
+            finetune_steps=params.get("finetune_steps", 500),
+            output_path=str(refine_job.output_ply_path),
+            progress_callback=update_progress,
+            diagnostics_dir=str(output_dir / "diagnostics"),
+        )
+
+        return {
+            "initial_hole_fraction": result["initial_hole_fraction"],
+            "final_hole_fraction": result["final_hole_fraction"],
+            "final_count": result["gaussians_count"],
+            "iterations_used": result["iterations_used"],
+            "total_time": result["total_time"],
+        }
+    finally:
+        if ply_local_download is not None and ply_local_download.exists():
+            try:
+                ply_local_download.unlink()
+            except OSError:
+                pass
 
 
 @app.get("/api/refine/status/{refine_id}")
@@ -785,7 +860,7 @@ async def get_refine_metrics(refine_id: str):
 
 @app.post("/api/shutdown")
 async def shutdown_server(request: Request):
-    """关闭 Panorama2Gaussian 服务（仅本机）。"""
+    """关闭 SPAG-4D 服务（仅本机）。"""
 
     import os
 
@@ -818,7 +893,7 @@ async def root():
     """纯 API 服务：根路径返回 OpenAPI 文档与健康检查入口。"""
 
     return {
-        "service": "Panorama2Gaussian",
+        "service": "SPAG-4D",
         "openapi": "/openapi.json",
         "docs": "/docs",
         "health": "/api/health",
@@ -829,7 +904,7 @@ async def root():
 # 启动：在绑定端口前结束占用该端口的旧进程
 # ─────────────────────────────────────────────────────────────────
 def kill_existing_server(port: int):
-    """在绑定前结束占用 *port* 的 Panorama2Gaussian 服务（若存在）。"""
+    """在绑定前结束占用 *port* 的 SPAG-4D 服务（若存在）。"""
 
     import urllib.request
 
@@ -867,7 +942,7 @@ DEFAULT_PORT = 7860
 if __name__ == "__main__":
     import argparse, uvicorn
 
-    parser = argparse.ArgumentParser(description="Panorama2Gaussian 服务")
+    parser = argparse.ArgumentParser(description="SPAG-4D 服务")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", default="0.0.0.0", help="0.0.0.0 表示监听本机所有网卡")
     args = parser.parse_args()

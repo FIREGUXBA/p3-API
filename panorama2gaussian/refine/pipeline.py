@@ -47,9 +47,16 @@ def refine_splat(
     if diag_dir:
         diag_dir.mkdir(parents=True, exist_ok=True)
 
-    # 加载全景
+    # 加载全景（强制 RGB；若分辨率与深度不一致则对齐到深度尺寸，避免下游切片不匹配）
     from PIL import Image
-    panorama = np.array(Image.open(panorama_path)).astype(np.float32) / 255.0
+    pano_img = Image.open(panorama_path).convert('RGB')
+    dh, dw = depth_map.shape[:2]
+    if pano_img.size != (dw, dh):
+        logger.info(
+            f"[refine] 全景 {pano_img.size} 与深度 ({dw}, {dh}) 不一致，重采样以对齐"
+        )
+        pano_img = pano_img.resize((dw, dh), Image.BILINEAR)
+    panorama = np.array(pano_img).astype(np.float32) / 255.0
 
     report("camera_rig", 5)
 

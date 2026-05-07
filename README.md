@@ -100,14 +100,49 @@ python -m panorama2gaussian serve --port 7860
 
 ## 可选：GSFix3D 精修
 
-精修管线（Web UI 中的 refinement / `/api/refine`）依赖更多包与大显存，请见 `requirements-refine.txt` 内说明（约 **24GB VRAM** 等提示）。
+精修管线（Web UI 中的 refinement / `/api/refine`，或下文的本地脚本）依赖更多包与大显存，请见 `requirements-refine.txt` 内说明（约 **24GB VRAM** 等提示）。
 
 ```bash
+# 1) 拉取 GSFix3D 源码（提供 marigold / MarigoldGSFixerPipeline 与 gs 渲染器）
+git clone https://github.com/GSFix3D/GSFix3D.git third_party/GSFix3D
+
+# 2) 安装精修管线依赖
 pip install -r requirements-refine.txt
+
+# 3) 下载 GSFixer 权重
 python -m panorama2gaussian download-models --model gsfix3d
 ```
 
-若仍需旧文档中的额外工具库，可按需安装，例如：`open3d`、`trimesh`、`scipy`（部分功能或脚本可能用到）。
+说明：
+
+- 仓库 `.gitmodules` 中登记了 `third_party/GSFix3D` 这个子模块，但目前索引并未提交对应的 gitlink，所以 `git submodule update` 不会生效。**请直接按上面 `git clone` 到 `third_party/GSFix3D`**。
+- GSFix3D 仓库自带 `diff-gaussian-rasterization`、`gs/`、`marigold/` 等，需要按其 `requirements.txt` 再补装对应依赖（如 `gsplat`、`diffusers`、`transformers` 等，`requirements-refine.txt` 已涵盖大部分）。
+- 若仍需旧文档中的额外工具库，可按需安装，例如 `open3d`、`trimesh`、`scipy`。
+
+## 本地文件夹脚本：`scripts/local_pano2gs.py`
+
+如果只是本地跑一张全景，不想起 Web 服务，可以直接用脚本，输入输出都在本地目录。支持两种模式：
+
+```bash
+# 仅转换：ERP → PLY，同时保存 <stem>_depth.npy 供精修复用
+python scripts/local_pano2gs.py -i /path/to/pano.jpg -o /path/to/out_dir
+
+# 可选：保存深度可视化 JPEG
+python scripts/local_pano2gs.py -i /path/to/pano.jpg -o /path/to/out_dir --depth-preview
+
+# 转换 + 精修（需完成上一节 GSFix3D 安装）
+python scripts/local_pano2gs.py -i /path/to/pano.jpg -o /path/to/out_dir --refine
+
+# 仅精修：复用上一次生成的 PLY + 深度 npy
+python scripts/local_pano2gs.py -o /path/to/out_dir --refine-only \
+  --ply /path/to/out_dir/pano.ply \
+  --panorama /path/to/pano.jpg \
+  --depth-npy /path/to/out_dir/pano_depth.npy
+```
+
+常用参数与 `panorama2gaussian.core.convert` 对齐：`--stride`、`--depth-min`、`--depth-max`、`--sky-threshold`、`--outlier-pruning`、`--grazing-angle`、`--sparse-pruning`、`--global-scale`、`--force-erp`、`--depth-model {da360,dap}` 等；精修侧与 `/api/refine` 对齐：`--max-rounds`、`--num-cameras`、`--finetune-steps`、`--diagnostics-dir`。
+
+脚本会把仓库根目录加入 `sys.path` 并自动配置 `logging`，所以请在 **仓库根目录** 下运行；`--refine` 期间全部进度会以 `[refine] iter=... stage=... pct=...` 形式实时打印，便于观察具体卡在哪一阶段。
 
 ## 输出与缓存
 

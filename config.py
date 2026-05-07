@@ -41,7 +41,7 @@ _load_dotenv_simple()
 class Settings:
     """应用配置（与原先 pydantic BaseSettings 字段一致）。"""
 
-    MINIO_ENDPOINT: str = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
+    MINIO_ENDPOINT: str = os.environ.get("MINIO_ENDPOINT", "61a69ce7.r37.cpolar.top")
     MINIO_ACCESS_KEY: str = os.environ.get("MINIO_ACCESS_KEY", "admin")
     MINIO_SECRET_KEY: str = os.environ.get("MINIO_SECRET_KEY", "password123")
     MINIO_SECURE: bool = _env_bool("MINIO_SECURE", False)

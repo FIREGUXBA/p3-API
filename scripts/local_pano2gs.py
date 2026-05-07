@@ -94,10 +94,11 @@ def main() -> int:
         choices=("da360", "dap"),
         help="深度估计后端",
     )
-    parser.add_argument("--stride", type=int, default=2)
-    parser.add_argument("--depth-min", type=float, default=None)
-    parser.add_argument("--depth-max", type=float, default=None)
-    parser.add_argument("--sky-threshold", type=float, default=None)
+    # 默认与 API / 前端约定一致
+    parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument("--depth-min", type=float, default=0.1)
+    parser.add_argument("--depth-max", type=float, default=100.0)
+    parser.add_argument("--sky-threshold", type=float, default=80.0)
     parser.add_argument("--outlier-pruning", type=float, default=0.3)
     parser.add_argument("--grazing-angle", type=float, default=65.0)
     parser.add_argument("--sparse-pruning", type=float, default=0.3)

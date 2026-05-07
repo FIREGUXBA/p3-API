@@ -11,7 +11,9 @@ pip-wheel-metadata/
 share/python-wheels/
 *.manifest
 *.spec
-
+output/
+test-data/
+SPAG4D-main/
 # Virtual environments
 .venv/
 venv/

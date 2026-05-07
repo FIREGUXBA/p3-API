@@ -16,5 +16,9 @@ gsplat>=1.5.0
 
 # DINOv2 semantic features (loaded via torch.hub, no pip install needed)
 
+# Mesh extraction (Poisson + simplify for conditioning)
+open3d>=0.18.0
+trimesh>=4.0.0
+
 # Visualization
 matplotlib>=3.7.0
