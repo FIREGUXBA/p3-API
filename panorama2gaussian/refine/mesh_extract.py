@@ -10,10 +10,10 @@ def extract_conditioning_mesh(
     depth_map,
     panorama,
     simplify_ratio=None,
-    target_rows=256,
+    target_rows=384,
     max_depth=500,
     min_depth=0.01,
-    depth_edge_ratio=1.25,
+    depth_edge_ratio=1.35,
 ):
     """从等距柱状深度直接规则三角化得到带纹理网格（无 Poisson）。
 
@@ -236,7 +236,7 @@ def render_mesh(
 
     if point_radius is None:
         # 512 分辨率时约 3~4 像素，适合 conditioning
-        point_radius = max(1, int(round(h / 160)))
+        point_radius = max(1, int(round(h / 256)))
 
     r = int(point_radius)
 

@@ -26,9 +26,10 @@ class RefineConfig:
     finetune_steps: int = 500
     finetune_lr: float = 1.0e-5
     inference_steps: int = 10
+    gsfixer_infer_passes: int = 2
     guidance_scale: float = 7.5
     mesh_simplify_ratio: Optional[float] = None
-    mesh_target_rows: int = 256
+    mesh_target_rows: int = 384
 
     # --- 阶段 3：蒸馏 ---
     # 与 GSFix3D 参考实现一致（arguments.py OptimizationParams）

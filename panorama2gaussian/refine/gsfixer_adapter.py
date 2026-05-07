@@ -176,21 +176,35 @@ class GSFixerAdapter:
         hole_masks: List[np.ndarray],
         mesh,
         cameras,
-        num_steps: int = 20,
+        num_steps: int = 10,
+        infer_passes: int = 2,
         guidance_scale: float = 7.5,
     ) -> List[np.ndarray]:
-        """对有空洞的 GS 渲染运行 GSFixer 推理。"""
+        """对有空洞的 GS 渲染运行 GSFixer 推理。
+
+        使用扩张后的 soft_input 构造条件（让模型覆盖洞缘与稀疏区），
+        略小的 soft_paste 把生成结果贴回；可选多轮在同一 mask 上 refinement。
+        """
         if self.pipe is None:
             raise RuntimeError("请先调用 load() 再 infer()")
 
-        logger.info("正在对 %d 个视角运行 GSFixer 推理 …", len(gs_renders))
+        _ = guidance_scale  # API 兼容；Marigold 流水线当前未使用
+
+        logger.info(
+            "正在对 %d 个视角运行 GSFixer 推理（每视角 %d 轮）…",
+            len(gs_renders),
+            infer_passes,
+        )
         repaired: List[np.ndarray] = []
 
         from .mesh_extract import render_mesh
-        from scipy.ndimage import gaussian_filter
+        from scipy.ndimage import binary_dilation, gaussian_filter
 
         debug_dir = Path("/root/p3-API/output/debug_gsfixer_infer")
         debug_dir.mkdir(parents=True, exist_ok=True)
+
+        if infer_passes < 1:
+            raise ValueError("infer_passes 必须 >= 1")
 
         for i, (gs_img, mask, cam) in enumerate(
             zip(gs_renders, hole_masks, cameras)
@@ -207,6 +221,8 @@ class GSFixerAdapter:
                 mesh,
                 cam,
                 resolution=(gs_img.shape[0], gs_img.shape[1]),
+                point_radius=1,
+                fill_holes=True,
                 allow_fallback=False,
             )
 
@@ -215,37 +231,21 @@ class GSFixerAdapter:
                     f"视角 {i}: mesh condition 是近似常量图，std={mesh_img.std():.8f}"
                 )
 
-            soft_mask = gaussian_filter(mask.astype(np.float64), sigma=3.0)
-            soft_mask = np.clip(soft_mask, 0, 1).astype(np.float32)
-            mask_3d = soft_mask[..., None]
+            base_mask = mask > 0.5
+            input_mask = binary_dilation(base_mask, iterations=8)
+            paste_mask = binary_dilation(base_mask, iterations=4)
 
-            gs_condition = gs_img * (1.0 - mask_3d) + mesh_img * mask_3d
+            soft_input = gaussian_filter(input_mask.astype(np.float32), sigma=4.0)
+            soft_input = np.clip(soft_input, 0, 1).astype(np.float32)
+            soft_paste = gaussian_filter(paste_mask.astype(np.float32), sigma=3.0)
+            soft_paste = np.clip(soft_paste, 0, 1).astype(np.float32)
 
-            gs_pil = Image.fromarray(
-                (gs_condition * 255).clip(0, 255).astype(np.uint8)
-            )
+            soft_input_3d = soft_input[..., None]
+            soft_paste_3d = soft_paste[..., None]
+
             mesh_pil = Image.fromarray(
                 (mesh_img * 255).clip(0, 255).astype(np.uint8)
             )
-
-            try:
-                output = self.pipe(
-                    gs_pil,
-                    condition_image2=mesh_pil if mesh is not None else None,
-                    denoising_steps=num_steps,
-                    processing_res=0,
-                    match_input_res=True,
-                    show_progress_bar=False,
-                )
-
-                result = np.array(output.fixed_rgb).astype(np.float32) / 255.0
-
-            except Exception as e:
-                logger.exception("  GSFixer 推理失败")
-                raise RuntimeError(f"GSFixer 推理失败，视角 {i}") from e
-
-            composited = gs_img * (1.0 - mask_3d) + result * mask_3d
-            composited = composited.astype(np.float32)
 
             Image.fromarray((gs_img * 255).clip(0, 255).astype(np.uint8)).save(
                 debug_dir / f"{i:03d}_input_gs.png"
@@ -256,23 +256,75 @@ class GSFixerAdapter:
             Image.fromarray((mesh_img * 255).clip(0, 255).astype(np.uint8)).save(
                 debug_dir / f"{i:03d}_mesh.png"
             )
-            Image.fromarray((gs_condition * 255).clip(0, 255).astype(np.uint8)).save(
-                debug_dir / f"{i:03d}_gs_condition_filled.png"
+            Image.fromarray((soft_input * 255).clip(0, 255).astype(np.uint8)).save(
+                debug_dir / f"{i:03d}_soft_input.png"
             )
-            Image.fromarray((result * 255).clip(0, 255).astype(np.uint8)).save(
-                debug_dir / f"{i:03d}_gsfixer_raw.png"
+            Image.fromarray((soft_paste * 255).clip(0, 255).astype(np.uint8)).save(
+                debug_dir / f"{i:03d}_soft_paste.png"
             )
+
+            current = gs_img.copy().astype(np.float32)
+            last_result = current
+
+            for pass_idx in range(infer_passes):
+                gs_condition = (
+                    current * (1.0 - soft_input_3d) + mesh_img * soft_input_3d
+                )
+
+                gs_pil = Image.fromarray(
+                    (gs_condition * 255).clip(0, 255).astype(np.uint8)
+                )
+
+                try:
+                    output = self.pipe(
+                        gs_pil,
+                        condition_image2=mesh_pil if mesh is not None else None,
+                        denoising_steps=num_steps,
+                        processing_res=0,
+                        match_input_res=True,
+                        show_progress_bar=False,
+                    )
+
+                    result = np.array(output.fixed_rgb).astype(np.float32) / 255.0
+
+                except Exception as e:
+                    logger.exception("  GSFixer 推理失败")
+                    raise RuntimeError(
+                        f"GSFixer 推理失败，视角 {i}，轮次 {pass_idx}"
+                    ) from e
+
+                last_result = result
+                current = (
+                    current * (1.0 - soft_paste_3d) + result * soft_paste_3d
+                )
+                current = current.astype(np.float32)
+
+                Image.fromarray(
+                    (gs_condition * 255).clip(0, 255).astype(np.uint8)
+                ).save(
+                    debug_dir
+                    / f"{i:03d}_p{pass_idx}_gs_condition_filled.png"
+                )
+                Image.fromarray(
+                    (result * 255).clip(0, 255).astype(np.uint8)
+                ).save(debug_dir / f"{i:03d}_p{pass_idx}_gsfixer_raw.png")
+                Image.fromarray(
+                    (current * 255).clip(0, 255).astype(np.uint8)
+                ).save(debug_dir / f"{i:03d}_p{pass_idx}_after_paste.png")
+
+            composited = current.astype(np.float32)
+
             Image.fromarray((composited * 255).clip(0, 255).astype(np.uint8)).save(
                 debug_dir / f"{i:03d}_composited.png"
             )
 
-            if np.any(mask > 0.5):
+            if np.any(base_mask):
                 logger.info(
-                    "    mesh std=%.4f, gs_cond hole std=%.4f, raw hole mean=%.4f, raw hole std=%.4f",
+                    "    mesh std=%.4f, gs_cond(base) std=%.4f, raw(base) mean=%.4f, raw(base) std=%.4f",
                     float(mesh_img.std()),
-                    float(gs_condition[mask > 0.5].std()),
-                    float(result[mask > 0.5].mean()),
-                    float(result[mask > 0.5].std()),
+                    float(gs_condition[base_mask].std()),
+                    float(last_result[base_mask].mean()),
+                    float(last_result[base_mask].std()),
                 )
 
             repaired.append(composited)

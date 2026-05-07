@@ -138,7 +138,9 @@ def refine_splat(
         repaired = gsfixer.infer(
             gs_renders=repair_renders, hole_masks=repair_masks,
             mesh=mesh, cameras=repair_cams,
-            num_steps=config.inference_steps, guidance_scale=config.guidance_scale,
+            num_steps=config.inference_steps,
+            infer_passes=config.gsfixer_infer_passes,
+            guidance_scale=config.guidance_scale,
         )
 
         if diag_dir:
