@@ -104,6 +104,22 @@ def distill_to_gaussians(
     repair_tensors = [
         torch.from_numpy(img).permute(2, 0, 1).cuda() for img in repaired_images
     ]
+    if hole_masks is not None and len(hole_masks) == len(repaired_images):
+        repair_mask_tensors = [
+            torch.from_numpy(np.asarray(mask, dtype=np.float32))
+            .float()
+            .cuda()[None, :, :]
+            for mask in hole_masks
+        ]
+    else:
+        if hole_masks is not None:
+            logger.warning(
+                "distill：hole_masks 与修复图数量不一致，阶段 A 使用全 1 掩码"
+            )
+        repair_mask_tensors = [
+            torch.ones(1, t.shape[1], t.shape[2], device=t.device, dtype=torch.float32)
+            for t in repair_tensors
+        ]
     repair_gs_cams = [_camera_to_gs(cam) for cam in cameras]
 
     orig_tensors = None
@@ -132,7 +148,11 @@ def distill_to_gaussians(
             viewspace_points = render_pkg["viewspace_points"]
             visibility_filter = render_pkg["visibility_filter"]
 
-            loss = 0.8 * l1_loss(rendered, gt_image) + 0.2 * (1 - ssim(rendered, gt_image))
+            mask = repair_mask_tensors[view_idx]
+            weight = 1.0 + 10.0 * mask
+            l1 = torch.abs(rendered - gt_image)
+            l1_weighted = (l1 * weight).mean()
+            loss = l1_weighted + 0.1 * (1 - ssim(rendered, gt_image))
             loss.backward()
 
             gaussians.add_densification_stats(viewspace_points, visibility_filter)

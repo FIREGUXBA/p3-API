@@ -70,8 +70,10 @@ def refine_splat(
 
     report("mesh_extract", 10)
     mesh = extract_conditioning_mesh(
-        depth_map=depth_map, panorama=panorama,
+        depth_map=depth_map,
+        panorama=panorama,
         simplify_ratio=config.mesh_simplify_ratio,
+        target_rows=config.mesh_target_rows,
     )
 
     cubemap_faces, cubemap_cameras = extract_cubemap_views(
@@ -144,13 +146,17 @@ def refine_splat(
 
         report("distill", 70 + iteration * 10, iter_num)
 
+        # 临时：关闭原始 cubemap 锚定，排查修复是否写回；确认后恢复 cubemap + kf_iters
         gaussians = distill_to_gaussians(
-            gaussians=gaussians, repaired_images=repaired,
-            cameras=repair_cams, hole_masks=repair_masks,
-            original_images=cubemap_faces, original_cameras=cubemap_cameras,
+            gaussians=gaussians,
+            repaired_images=repaired,
+            cameras=repair_cams,
+            hole_masks=repair_masks,
+            original_images=None,
+            original_cameras=None,
             densify_grad_threshold=config.densify_grad_threshold,
-            iters_per_view=20,   # 与 refine_gs.py 一致
-            kf_iters=50,         # 与 refine_gs.py 一致（保守）
+            iters_per_view=100,
+            kf_iters=0,
         )
 
         tag_gaussian_provenance(gaussians, initial_gaussian_count)

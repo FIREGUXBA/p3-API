@@ -1,6 +1,7 @@
 """精修流水线配置。"""
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -24,9 +25,10 @@ class RefineConfig:
     # --- 阶段 2：GSFixer ---
     finetune_steps: int = 500
     finetune_lr: float = 1.0e-5
-    inference_steps: int = 50
+    inference_steps: int = 10
     guidance_scale: float = 7.5
-    mesh_simplify_ratio: float = 0.1
+    mesh_simplify_ratio: Optional[float] = None
+    mesh_target_rows: int = 256
 
     # --- 阶段 3：蒸馏 ---
     # 与 GSFix3D 参考实现一致（arguments.py OptimizationParams）
